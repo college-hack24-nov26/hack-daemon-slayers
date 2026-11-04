@@ -3,7 +3,14 @@ const express = require('express');
 const { db } = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errors');
-const { isStringWithLength, isPositiveInteger, isNonEmptyString } = require('../validate');
+const {
+  isStringWithLength,
+  isPositiveInteger,
+  isNonEmptyString,
+  isValidLat,
+  isValidLng,
+  isValidAccuracy
+} = require('../validate');
 
 const router = express.Router();
 
@@ -13,7 +20,10 @@ router.get('/teacher/classrooms', requireRole('teacher'), asyncHandler(async (re
   const rows = db.prepare(`
     SELECT
       c.id, c.name, c.code, c.archived, c.node_uid AS nodeUid,
-      COALESCE(n.label, '') AS nodeLabel
+      COALESCE(n.label, '') AS nodeLabel,
+      n.lat AS nodeLat,
+      n.lng AS nodeLng,
+      n.radius_m AS nodeRadius
     FROM classrooms c
     LEFT JOIN phy_nodes n ON n.uid = c.node_uid
     WHERE c.teacher_id = ?
@@ -28,7 +38,10 @@ router.get('/teacher/classrooms', requireRole('teacher'), asyncHandler(async (re
       code: r.code,
       archived: Boolean(r.archived),
       nodeUid: r.nodeUid || null,
-      nodeLabel: r.nodeLabel || null
+      nodeLabel: r.nodeLabel || null,
+      lat: r.nodeLat !== null && r.nodeLat !== undefined ? r.nodeLat : null,
+      lng: r.nodeLng !== null && r.nodeLng !== undefined ? r.nodeLng : null,
+      radiusM: r.nodeRadius !== null && r.nodeRadius !== undefined ? r.nodeRadius : null
     }))
   });
 }));
@@ -67,7 +80,7 @@ router.post('/teacher/classrooms', requireRole('teacher'), asyncHandler(async (r
   });
 }));
 
-// Teacher only: Update classroom (rename, code, archive)
+// Teacher only: Update classroom (rename, code, archive, location coordinates & radius)
 router.patch('/teacher/classrooms/:id', requireRole('teacher'), asyncHandler(async (req, res) => {
   const teacherId = req.user.id;
   const classroomId = Number(req.params.id);
@@ -89,7 +102,7 @@ router.patch('/teacher/classrooms/:id', requireRole('teacher'), asyncHandler(asy
     });
   }
 
-  const { name, code, archived } = req.body || {};
+  const { name, code, archived, lat, lng, radiusM } = req.body || {};
   let newName = existing.name;
   let newCode = existing.code;
   let newArchived = existing.archived;
@@ -118,11 +131,77 @@ router.patch('/teacher/classrooms/:id', requireRole('teacher'), asyncHandler(asy
     }
   }
 
+  // Location coordinates update
+  if (lat !== undefined || lng !== undefined || radiusM !== undefined) {
+    if (!existing.node_uid) {
+      return res.status(400).json({
+        ok: false,
+        error: 'ERR_BAD_REQUEST',
+        message: 'Cannot update location coordinates because no PHY_NODE is currently linked to this classroom.'
+      });
+    }
+
+    const node = db.prepare('SELECT uid, lat, lng, radius_m FROM phy_nodes WHERE uid = ?').get(existing.node_uid);
+    if (!node) {
+      return res.status(404).json({
+        ok: false,
+        error: 'ERR_NOT_FOUND',
+        message: 'Linked PHY_NODE not found.'
+      });
+    }
+
+    let newLat = node.lat;
+    let newLng = node.lng;
+    let newRadius = node.radius_m;
+
+    if (lat !== undefined) {
+      if (!isValidLat(lat)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'ERR_BAD_REQUEST',
+          message: 'Invalid latitude: must be between -90 and 90.'
+        });
+      }
+      newLat = Number(lat);
+    }
+
+    if (lng !== undefined) {
+      if (!isValidLng(lng)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'ERR_BAD_REQUEST',
+          message: 'Invalid longitude: must be between -180 and 180.'
+        });
+      }
+      newLng = Number(lng);
+    }
+
+    if (radiusM !== undefined) {
+      if (!isValidAccuracy(radiusM) || Number(radiusM) <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: 'ERR_BAD_REQUEST',
+          message: 'Invalid radius: must be a positive number.'
+        });
+      }
+      newRadius = Number(radiusM);
+    }
+
+    db.prepare(`
+      UPDATE phy_nodes
+      SET lat = ?, lng = ?, radius_m = ?
+      WHERE uid = ?
+    `).run(newLat, newLng, newRadius, existing.node_uid);
+  }
+
   db.prepare(`
     UPDATE classrooms
     SET name = ?, code = ?, archived = ?, node_uid = ?
     WHERE id = ? AND teacher_id = ?
   `).run(newName, newCode, newArchived, newNodeUid, classroomId, teacherId);
+
+  // Return updated classroom info including coordinates if node linked
+  const updatedNode = newNodeUid ? db.prepare('SELECT lat, lng, radius_m FROM phy_nodes WHERE uid = ?').get(newNodeUid) : null;
 
   res.json({
     ok: true,
@@ -131,7 +210,10 @@ router.patch('/teacher/classrooms/:id', requireRole('teacher'), asyncHandler(asy
       name: newName,
       code: newCode,
       archived: Boolean(newArchived),
-      nodeUid: newNodeUid
+      nodeUid: newNodeUid,
+      lat: updatedNode ? updatedNode.lat : null,
+      lng: updatedNode ? updatedNode.lng : null,
+      radiusM: updatedNode ? updatedNode.radius_m : null
     }
   });
 }));

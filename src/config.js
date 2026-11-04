@@ -36,7 +36,7 @@ const config = {
   dbPath: rawDb === ':memory:' ? rawDb : path.resolve(rawDb),
   minGapMinutes: asNum(pick('min-gap', 'MIN_GAP_MINUTES', 5), 'min-gap'),
   maxAccuracyM: asNum(pick('max-accuracy', 'MAX_ACCURACY_M', 50), 'max-accuracy'),
-  tzOffsetSeconds: asNum(pick('tz-offset', 'TZ_OFFSET_SECONDS', 19800), 'tz-offset'),
+  tzOffsetSeconds: asNum(pick('tz-offset', 'TZ_OFFSET_SECONDS', 0), 'tz-offset'),
   publicHost: String(pick('public-host', 'PUBLIC_HOST', '')),
   masterKey: process.env.MASTER_KEY || '',
 };
@@ -61,7 +61,7 @@ Usage: node src/server.js [options]      (flags override .env, .env overrides de
   --db <path>             SQLite file, or :memory:               (default ./data/attendance.db)
   --min-gap <minutes>     minimum gap between check-in/out       (default 5)
   --max-accuracy <m>      worst accepted GPS accuracy in metres  (default 50)
-  --tz-offset <seconds>   attendance-day offset from UTC         (default 19800 = IST)
+  --tz-offset <seconds>   attendance-day offset from UTC         (default 0 = UTC)
   --public-host <host>    extra allowed Origin host (ngrok name) (default none)
   --help                  show this message
 `;

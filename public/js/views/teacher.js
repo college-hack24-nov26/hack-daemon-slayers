@@ -6,6 +6,156 @@ export function render(container) {
 
   const msgContainer = h('div', { 'aria-live': 'polite' });
   const classListContainer = h('div');
+  const modalContainer = h('div');
+
+  function showLocationModal(cls) {
+    modalContainer.replaceChildren();
+
+    const latInput = h('input', {
+      type: 'text',
+      id: 'locLat',
+      value: cls.lat !== null && cls.lat !== undefined ? String(cls.lat) : ''
+    });
+
+    const lngInput = h('input', {
+      type: 'text',
+      id: 'locLng',
+      value: cls.lng !== null && cls.lng !== undefined ? String(cls.lng) : ''
+    });
+
+    const radiusInput = h('input', {
+      type: 'text',
+      id: 'locRadius',
+      value: cls.radiusM !== null && cls.radiusM !== undefined ? String(cls.radiusM) : '35'
+    });
+
+    const modalAlert = h('div');
+
+    const getGpsBtn = h('button', {
+      type: 'button',
+      class: 'btn btn-outline btn-full',
+      style: 'margin-bottom: 16px;',
+      onclick: () => {
+        if (!navigator.geolocation) {
+          showAlert(modalAlert, 'Geolocation is not supported by your browser.');
+          return;
+        }
+
+        getGpsBtn.disabled = true;
+        getGpsBtn.textContent = 'Acquiring GPS location...';
+        showAlert(modalAlert, '');
+
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            latInput.value = pos.coords.latitude.toFixed(6);
+            lngInput.value = pos.coords.longitude.toFixed(6);
+            getGpsBtn.disabled = false;
+            getGpsBtn.textContent = '📍 Get Current Device Location';
+            showAlert(modalAlert, 'Location acquired!', 'success');
+          },
+          (err) => {
+            getGpsBtn.disabled = false;
+            getGpsBtn.textContent = '📍 Get Current Device Location';
+            if (err.code === 1) {
+              showAlert(modalAlert, 'Location permission denied. Please allow location in browser settings.');
+            } else if (err.code === 3) {
+              showAlert(modalAlert, 'GPS timeout. Try moving to an open area.');
+            } else {
+              showAlert(modalAlert, 'Could not get location. Check your GPS and try again.');
+            }
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      }
+    }, '📍 Get Current Device Location');
+
+    const saveBtn = h('button', {
+      type: 'submit',
+      class: 'btn btn-primary',
+      style: 'flex: 1;'
+    }, 'Save');
+
+    const cancelBtn = h('button', {
+      type: 'button',
+      class: 'btn btn-outline',
+      style: 'flex: 1;',
+      onclick: () => {
+        modalContainer.replaceChildren();
+      }
+    }, 'Cancel');
+
+    const modalForm = h('form', {
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const latVal = Number(latInput.value.trim());
+        const lngVal = Number(lngInput.value.trim());
+        const radVal = Number(radiusInput.value.trim());
+
+        if (!Number.isFinite(latVal) || latVal < -90 || latVal > 90) {
+          showAlert(modalAlert, 'Latitude must be between -90 and 90.');
+          return;
+        }
+        if (!Number.isFinite(lngVal) || lngVal < -180 || lngVal > 180) {
+          showAlert(modalAlert, 'Longitude must be between -180 and 180.');
+          return;
+        }
+        if (!Number.isFinite(radVal) || radVal <= 0) {
+          showAlert(modalAlert, 'Radius must be a positive number.');
+          return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        try {
+          await api(`/api/teacher/classrooms/${cls.id}`, {
+            method: 'PATCH',
+            body: { lat: latVal, lng: lngVal, radiusM: radVal }
+          });
+          modalContainer.replaceChildren();
+          showAlert(msgContainer, 'Classroom coordinates updated.', 'success');
+          await loadData();
+        } catch (err) {
+          showAlert(modalAlert, err.message || 'Could not update coordinates.');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+        }
+      }
+    },
+      getGpsBtn,
+      h('div', { class: 'form-group' },
+        h('label', { for: 'locLat' }, 'Latitude (-90 to 90)'),
+        latInput
+      ),
+      h('div', { class: 'form-group' },
+        h('label', { for: 'locLng' }, 'Longitude (-180 to 180)'),
+        lngInput
+      ),
+      h('div', { class: 'form-group' },
+        h('label', { for: 'locRadius' }, 'Geofence Radius (metres)'),
+        radiusInput
+      ),
+      modalAlert,
+      h('div', { style: 'display: flex; gap: 8px; margin-top: 16px;' },
+        saveBtn,
+        cancelBtn
+      )
+    );
+
+    const overlay = h('div', {
+      class: 'modal-overlay',
+      onclick: (e) => {
+        if (e.target === overlay) modalContainer.replaceChildren();
+      }
+    },
+      h('div', { class: 'modal-content' },
+        h('h2', {}, `Location for '${cls.name}'`),
+        h('p', { style: 'font-size: 0.85rem;' }, 'Set the classroom coordinates or fetch them using your device GPS.'),
+        modalForm
+      )
+    );
+
+    modalContainer.appendChild(overlay);
+  }
 
   // New class form inputs
   const nameInput = h('input', {
@@ -73,7 +223,8 @@ export function render(container) {
     msgContainer,
     newClassCard,
     h('h2', { style: 'margin-top: 24px;' }, 'Your classes'),
-    classListContainer
+    classListContainer,
+    modalContainer
   );
 
   container.appendChild(mainWrapper);
@@ -150,8 +301,18 @@ export function render(container) {
           }
         }, cls.archived ? 'Restore' : 'Archive');
 
-        const actionRow = h('div', { style: 'display: flex; gap: 8px; margin-bottom: 16px;' },
+        // Location edit modal button
+        const editLocationBtn = cls.nodeUid && !cls.archived ? h('button', {
+          class: 'btn btn-outline',
+          style: 'min-height: 36px; padding: 0 12px; font-size: 0.875rem;',
+          onclick: () => {
+            showLocationModal(cls);
+          }
+        }, '📍 Location') : null;
+
+        const actionRow = h('div', { style: 'display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;' },
           renameBtn,
+          editLocationBtn,
           archiveBtn
         );
 
@@ -220,10 +381,13 @@ export function render(container) {
           }, 'Unassign') : null;
 
           nodeSection = h('div', { style: 'background: var(--bg-color); padding: 12px; border-radius: 8px;' },
-            h('label', { style: 'margin-bottom: 6px;' },
+            h('label', { style: 'margin-bottom: 6px; display: block;' },
               'Linked PHY_NODE: ',
               cls.nodeUid ? h('strong', {}, `${cls.nodeUid} ${cls.nodeLabel ? `(${cls.nodeLabel})` : ''}`) : h('span', { style: 'color: var(--text-muted);' }, 'None')
             ),
+            cls.nodeUid && cls.lat !== null ? h('div', { style: 'font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;' },
+              `📍 Coordinates: ${cls.lat.toFixed(4)}, ${cls.lng.toFixed(4)} (Radius: ${cls.radiusM}m)`
+            ) : null,
             h('div', { style: 'display: flex; gap: 8px; align-items: center; margin-top: 8px;' },
               selectEl,
               assignBtn,
